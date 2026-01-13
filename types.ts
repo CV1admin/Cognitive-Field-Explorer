@@ -39,13 +39,20 @@ export interface OpResult {
 export interface SimSelf {
   identity: string;
   self_packet_id?: PacketID;
-  vars: Record<string, number>;
+  vars: {
+    arousal: number;
+    curiosity: number;
+    stability: number;
+    [key: string]: number;
+  };
 }
 
 export interface EpistemicStatus {
   innovationError: number;  // epsilon_t: Surprise/Prediction error
   diversity: number;        // Neff: Effective number of clusters (anti-collapse)
   coherence: number;        // S_t: Sheaf inconsistency (inverted for 'coherence')
+  recursionDominance: number; // R_t: Ratio of internal vs external processing
+  volatility: number;       // v_t: Environmental fluctuation speed
   healthIndex: number;      // H_t: Combined metric
 }
 

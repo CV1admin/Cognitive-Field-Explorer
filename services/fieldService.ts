@@ -135,6 +135,30 @@ export class InformationField {
 
     return Math.exp(entropy);
   }
+
+  calculateRecursionDominance(window: number = 32): number {
+    const recent = this.getLatest(window);
+    if (recent.length === 0) return 0;
+    
+    const internalKinds = new Set(['summary', 'trace', 'self_model', 'model', 'belief']);
+    const internalCount = recent.filter(p => internalKinds.has(p.kind)).length;
+    
+    return internalCount / recent.length;
+  }
+
+  calculateVolatility(window: number = 10): number {
+    const obs = this.query({ kinds: ['observation'], limit: window }).filter(p => p.embedding);
+    if (obs.length < 2) return 0;
+    
+    let totalDist = 0;
+    for (let i = 0; i < obs.length - 1; i++) {
+      const p1 = obs[i].embedding!;
+      const p2 = obs[i+1].embedding!;
+      totalDist += Math.sqrt(Math.pow(p1[0] - p2[0], 2) + Math.pow(p1[1] - p2[1], 2));
+    }
+    
+    return totalDist / (obs.length - 1);
+  }
 }
 
 export function createPacket(overrides: Partial<InfoPacket>): InfoPacket {
@@ -158,13 +182,14 @@ export const CentroidOperator = {
 
   applicable(field: InformationField): boolean {
     const pkts = field.query({ tags_any: ['observation', 'belief', 'trace'], limit: this.window });
-    const embCount = pkts.filter(p => p.embedding).length;
-    return embCount >= this.minPoints;
+    // IMPORTANT: Exclude quarantined probes from normal compression
+    const groundedPkts = pkts.filter(p => p.embedding && !p.tags.includes('quarantine'));
+    return groundedPkts.length >= this.minPoints;
   },
 
   run(field: InformationField, ctx: OpContext): OpResult {
     const pkts = field.query({ tags_any: ['observation', 'belief', 'trace'], limit: this.window });
-    const embPkts = pkts.filter(p => p.embedding);
+    const embPkts = pkts.filter(p => p.embedding && !p.tags.includes('quarantine'));
     
     const xSum = embPkts.reduce((acc, p) => acc + p.embedding![0], 0);
     const ySum = embPkts.reduce((acc, p) => acc + p.embedding![1], 0);
@@ -195,6 +220,54 @@ export const CentroidOperator = {
       consumed: embPkts.map(p => p.id),
       score_delta: 0.5,
       notes: [`Compressed ${embPkts.length} embeddings into centroid.`]
+    };
+  }
+};
+
+export const HierarchyOperator = {
+  name: 'hierarchy.compress',
+  window: 96,
+  targetCount: 10,
+
+  applicable(field: InformationField, isIgnition: boolean): boolean {
+    if (!isIgnition) return false;
+    const summaries = field.query({ kinds: ['summary'], limit: this.window });
+    return summaries.length >= 10;
+  },
+
+  run(field: InformationField, ctx: OpContext): OpResult {
+    const summaries = field.query({ kinds: ['summary'], limit: this.window }).filter(p => p.embedding);
+    
+    // Crude re-clustering into macro-centroids
+    const produced: InfoPacket[] = [];
+    const stepSize = Math.max(1, Math.floor(summaries.length / this.targetCount));
+    
+    for (let i = 0; i < summaries.length; i += stepSize) {
+      const chunk = summaries.slice(i, i + stepSize);
+      if (chunk.length === 0) continue;
+      
+      const xSum = chunk.reduce((acc, p) => acc + p.embedding![0], 0);
+      const ySum = chunk.reduce((acc, p) => acc + p.embedding![1], 0);
+      const centroid: [number, number] = [xSum / chunk.length, ySum / chunk.length];
+      
+      const pkt = createPacket({
+        kind: 'summary',
+        payload: { type: 'macro_summary', count: chunk.length },
+        embedding: centroid,
+        tags: ['macro', 'map', 'do_not_prune_micro', 'summary'],
+        confidence: 0.7,
+        parents: chunk.map(p => p.id),
+        operator: this.name,
+        meta: { step: ctx.step }
+      });
+      produced.push(pkt);
+    }
+
+    return {
+      produced,
+      consumed: summaries.map(p => p.id),
+      score_delta: 1.0,
+      notes: [`Hierarchical re-clustering: Generated ${produced.length} macro-centroids from ${summaries.length} summaries.`]
     };
   }
 };
