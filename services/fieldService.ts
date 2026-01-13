@@ -95,11 +95,12 @@ export class InformationField {
   // --- Epistemic Logic ---
 
   calculateInnovationError(latestObs: InfoPacket): number {
-    const latestSummary = this.query({ kinds: ['summary'], limit: 1 })[0];
-    if (!latestSummary || !latestSummary.embedding || !latestObs.embedding) return 0;
+    const latestAnchor = this.query({ kinds: ['vireax_anchor'], limit: 1 })[0] || 
+                        this.query({ kinds: ['summary'], limit: 1 })[0];
+    if (!latestAnchor || !latestAnchor.embedding || !latestObs.embedding) return 0.5;
     
-    const dx = latestObs.embedding[0] - latestSummary.embedding[0];
-    const dy = latestObs.embedding[1] - latestSummary.embedding[1];
+    const dx = latestObs.embedding[0] - latestAnchor.embedding[0];
+    const dy = latestObs.embedding[1] - latestAnchor.embedding[1];
     return Math.sqrt(dx * dx + dy * dy);
   }
 
@@ -139,24 +140,20 @@ export class InformationField {
   calculateRecursionDominance(window: number = 32): number {
     const recent = this.getLatest(window);
     if (recent.length === 0) return 0;
-    
-    const internalKinds = new Set(['summary', 'trace', 'self_model', 'model', 'belief']);
+    const internalKinds = new Set(['summary', 'trace', 'self_model', 'vireax_anchor', 'model', 'belief']);
     const internalCount = recent.filter(p => internalKinds.has(p.kind)).length;
-    
     return internalCount / recent.length;
   }
 
   calculateVolatility(window: number = 10): number {
     const obs = this.query({ kinds: ['observation'], limit: window }).filter(p => p.embedding);
     if (obs.length < 2) return 0;
-    
     let totalDist = 0;
     for (let i = 0; i < obs.length - 1; i++) {
       const p1 = obs[i].embedding!;
       const p2 = obs[i+1].embedding!;
       totalDist += Math.sqrt(Math.pow(p1[0] - p2[0], 2) + Math.pow(p1[1] - p2[1], 2));
     }
-    
     return totalDist / (obs.length - 1);
   }
 }
@@ -182,7 +179,6 @@ export const CentroidOperator = {
 
   applicable(field: InformationField): boolean {
     const pkts = field.query({ tags_any: ['observation', 'belief', 'trace'], limit: this.window });
-    // IMPORTANT: Exclude quarantined probes from normal compression
     const groundedPkts = pkts.filter(p => p.embedding && !p.tags.includes('quarantine'));
     return groundedPkts.length >= this.minPoints;
   },
@@ -237,19 +233,15 @@ export const HierarchyOperator = {
 
   run(field: InformationField, ctx: OpContext): OpResult {
     const summaries = field.query({ kinds: ['summary'], limit: this.window }).filter(p => p.embedding);
-    
-    // Crude re-clustering into macro-centroids
     const produced: InfoPacket[] = [];
     const stepSize = Math.max(1, Math.floor(summaries.length / this.targetCount));
     
     for (let i = 0; i < summaries.length; i += stepSize) {
       const chunk = summaries.slice(i, i + stepSize);
       if (chunk.length === 0) continue;
-      
       const xSum = chunk.reduce((acc, p) => acc + p.embedding![0], 0);
       const ySum = chunk.reduce((acc, p) => acc + p.embedding![1], 0);
       const centroid: [number, number] = [xSum / chunk.length, ySum / chunk.length];
-      
       const pkt = createPacket({
         kind: 'summary',
         payload: { type: 'macro_summary', count: chunk.length },
@@ -262,12 +254,6 @@ export const HierarchyOperator = {
       });
       produced.push(pkt);
     }
-
-    return {
-      produced,
-      consumed: summaries.map(p => p.id),
-      score_delta: 1.0,
-      notes: [`Hierarchical re-clustering: Generated ${produced.length} macro-centroids from ${summaries.length} summaries.`]
-    };
+    return { produced, consumed: summaries.map(p => p.id), score_delta: 1.0, notes: [`Hierarchical map re-clustered.`] };
   }
 };
