@@ -1,0 +1,5 @@
+{
+  "name": "Cognitive Field Explorer",
+  "description": "A sophisticated visualization and simulation environment for an append-only cognitive substrate. Features information fields, recursive controllers, sheaf-style consistency layers, and AI-driven pattern analysis using Gemini.",
+  "requestFramePermissions": []
+}
