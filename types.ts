@@ -42,10 +42,11 @@ export interface SimSelf {
   vars: Record<string, number>;
 }
 
-export interface Section {
-  ctx: string;
-  value: [number, number];
-  meta?: Record<string, any>;
+export interface EpistemicStatus {
+  innovationError: number;  // epsilon_t: Surprise/Prediction error
+  diversity: number;        // Neff: Effective number of clusters (anti-collapse)
+  coherence: number;        // S_t: Sheaf inconsistency (inverted for 'coherence')
+  healthIndex: number;      // H_t: Combined metric
 }
 
 export interface SheafConsistency {

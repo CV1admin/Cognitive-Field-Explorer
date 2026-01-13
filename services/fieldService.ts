@@ -13,7 +13,6 @@ export class InformationField {
     if (this.packets.has(pkt.id)) return pkt.id;
     this.packets.set(pkt.id, pkt);
     
-    // Maintain timeline sorted by time
     const index = this.timeline.findIndex(item => item.t > pkt.t);
     if (index === -1) {
       this.timeline.push({ t: pkt.t, id: pkt.id });
@@ -21,7 +20,6 @@ export class InformationField {
       this.timeline.splice(index, 0, { t: pkt.t, id: pkt.id });
     }
 
-    // Index tags
     pkt.tags.forEach(tag => {
       if (!this.tagIndex.has(tag)) this.tagIndex.set(tag, new Set());
       this.tagIndex.get(tag)!.add(pkt.id);
@@ -57,7 +55,6 @@ export class InformationField {
       });
     }
 
-    // Time slicing and initial candidate set if no tags provided
     if (q.since_t !== undefined || q.until_t !== undefined || ids === null) {
       let filteredTimeline = this.timeline;
       if (q.since_t !== undefined) filteredTimeline = filteredTimeline.filter(i => i.t >= q.since_t!);
@@ -94,6 +91,50 @@ export class InformationField {
   getSize(): number {
     return this.packets.size;
   }
+
+  // --- Epistemic Logic ---
+
+  calculateInnovationError(latestObs: InfoPacket): number {
+    const latestSummary = this.query({ kinds: ['summary'], limit: 1 })[0];
+    if (!latestSummary || !latestSummary.embedding || !latestObs.embedding) return 0;
+    
+    const dx = latestObs.embedding[0] - latestSummary.embedding[0];
+    const dy = latestObs.embedding[1] - latestSummary.embedding[1];
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  calculateDiversity(window: number = 32): number {
+    const observations = this.query({ kinds: ['observation'], limit: window }).filter(p => p.embedding);
+    const summaries = this.query({ kinds: ['summary'], limit: 10 }).filter(p => p.embedding);
+    
+    if (observations.length === 0 || summaries.length === 0) return 1.0;
+
+    const counts = new Map<PacketID, number>();
+    observations.forEach(obs => {
+      let nearestId = summaries[0].id;
+      let minDist = Infinity;
+      summaries.forEach(sum => {
+        const d = Math.sqrt(
+          Math.pow(obs.embedding![0] - sum.embedding![0], 2) + 
+          Math.pow(obs.embedding![1] - sum.embedding![1], 2)
+        );
+        if (d < minDist) {
+          minDist = d;
+          nearestId = sum.id;
+        }
+      });
+      counts.set(nearestId, (counts.get(nearestId) || 0) + 1);
+    });
+
+    let entropy = 0;
+    const total = observations.length;
+    counts.forEach(count => {
+      const p = count / total;
+      entropy -= p * Math.log(p);
+    });
+
+    return Math.exp(entropy);
+  }
 }
 
 export function createPacket(overrides: Partial<InfoPacket>): InfoPacket {
@@ -129,7 +170,6 @@ export const CentroidOperator = {
     const ySum = embPkts.reduce((acc, p) => acc + p.embedding![1], 0);
     const centroid: [number, number] = [xSum / embPkts.length, ySum / embPkts.length];
 
-    // Simple dispersion
     const dispersion = embPkts.reduce((acc, p) => {
       const dx = p.embedding![0] - centroid[0];
       const dy = p.embedding![1] - centroid[1];
